@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lector y Descargador de Archivos</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        input[type="file"] { margin-bottom: 20px; }
+        #output { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        #output th, #output td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        #output th { background-color: #f2f2f2; }
+        .input-fields label, .input-fields input { display: block; margin-bottom: 10px; }
+        #buttons-container button { padding: 10px 15px; margin-right: 10px; cursor: pointer; }
+        #filtroInput { margin-bottom: 15px; padding: 5px; width: 300px; }
+    </style>
+</head>
+<body>
+    <a href="index.php"><button>Volver</button></a>
+    <h1>Lectura de Archivo Excel</h1>
+
+  <!--  
+    <div class="input-fields">
+        <label for="codigoDocVendedor">Código de documento vendedor</label>
+        <input type="text" id="codigoDocVendedor" placeholder="Ej: 80">
+        
+        <label for="nombreApellido">Nombre y apellido</label>
+        <input type="text" id="nombreApellido" placeholder="Ej: Juan Pérez">
+
+        <label for="cuit">CUIT</label>
+        <input type="text" id="cuit" placeholder="Ej: 20-12345678-9">
+    </div>
+-->
+    <p>Selecciona un archivo .xls o .xlsx</p>
+    <input type="file" id="archivoInput" accept=".xls,.xlsx">
+    
+    <div id="buttons-container" style="display: none;">
+        <button id="descargarVentasBtn">Descargar Ventas</button>
+        <button id="descargarAlicuotasBtn">Descargar Alícuotas</button>
+        <button id="descargarAmbosBtn">Descargar Ambos Archivos</button>
+    </div>
+
+    <br>
+    <label for="filtroInput">Filtrar tabla:</label>
+    <input type="text" id="filtroInput" placeholder="Escribe para buscar...">
+
+    <table id="output"></table>
+    
+    <script>
+        document.getElementById('archivoInput').addEventListener('change', handleFile, false);
+        document.getElementById('descargarVentasBtn').addEventListener('click', () => descargarTXT('ventas'));
+        document.getElementById('descargarAlicuotasBtn').addEventListener('click', () => descargarTXT('alicuotas'));
+        document.getElementById('descargarAmbosBtn').addEventListener('click', () => descargarTXT('ambos'));
+        document.getElementById('filtroInput').addEventListener('keyup', filtrarTabla);
+
+        let globalHeaders;
+        let globalDataRows;
+        
+        function handleFile(e) {
+            const archivo = e.target.files[0];
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                if (jsonData.length === 0) {
+                    document.getElementById('output').innerHTML = '';
+                    document.getElementById('buttons-container').style.display = 'none';
+                    return;
+                }
+
+                const primeraFilaVacia = jsonData[0].every(celda => celda === null || celda === undefined || celda === '');
+                
+                if (primeraFilaVacia && jsonData.length > 1) {
+                    globalHeaders = jsonData[1];
+                    globalDataRows = jsonData.slice(2);
+                } else {
+                    globalHeaders = jsonData[0];
+                    globalDataRows = jsonData.slice(1);
+                }
+
+                displayTable(globalHeaders, globalDataRows);
+                document.getElementById('buttons-container').style.display = 'block';
+            };
+
+            reader.readAsArrayBuffer(archivo);
+        }
+
+        function displayTable(headers, rows) {
+            const outputTable = document.getElementById('output');
+            outputTable.innerHTML = '';
+
+            const thead = outputTable.createTHead();
+            const headerRow = thead.insertRow();
+            headers.forEach(headerText => {
+                const th = document.createElement('th');
+                th.textContent = headerText;
+                headerRow.appendChild(th);
+            });
+
+            const tbody = document.createElement('tbody');
+            outputTable.appendChild(tbody);
+
+            const tipoDocIndex = headers.indexOf("TIPO_DOC");
+
+            rows.forEach(row => {
+                const tr = tbody.insertRow();
+                row.forEach((cellData, index) => {
+                    const td = tr.insertCell();
+                    if (index === tipoDocIndex) {
+                        let cleanedData = String(cellData).replace(/_Factura_B/g, '');
+                        td.textContent = cleanedData;
+                    } else {
+                        td.textContent = cellData;
+                    }
+                });
+            });
+        }
+        
+        function filtrarTabla() {
+            const filtro = document.getElementById('filtroInput').value.toLowerCase();
+            const filas = document.querySelectorAll('#output tbody tr');
+
+            filas.forEach(fila => {
+                let coincide = false;
+                fila.querySelectorAll('td').forEach(celda => {
+                    if (celda.textContent.toLowerCase().includes(filtro)) {
+                        coincide = true;
+                    }
+                });
+                fila.style.display = coincide ? '' : 'none';
+            });
+        }
+
+        function downloadFile(content, filename) {
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+        }
+
+        function descargarTXT(tipo) {
+            if (tipo === 'ventas' || tipo === 'ambos') {
+                const ventasTexto = globalDataRows.map(row => {
+                    const getCellValue = (header) => row[globalHeaders.indexOf(header)] || "";
+                    
+                    let fecha = String(getCellValue("FECHA")).trim();
+                    const año = fecha.slice(-4);
+                    const mes = fecha.slice(3, 5);
+                    const dia = fecha.slice(0, 2);
+                    fecha = `${año}${mes}${dia}`;
+
+                    let tipoDoc = String(getCellValue("TIPO_DOC")).replace(/[^0-9]/g, '');
+                    tipoDoc = tipoDoc.slice(0, 3).padEnd(3, ' ');
+
+                    const ptoVenta = String(getCellValue("PTO_VENTA")).padStart(5, '0');
+                    const nro = String(getCellValue("NRO")).padStart(20, '0');
+                    
+                    const espacios = ' '.repeat(20);
+                    const cuitClienteCell = getCellValue("NRO_DOC");
+                    const tipoDocCliente = (cuitClienteCell === '11111111' ? '99' : '96');
+                    const cuitCliente = String(cuitClienteCell).replace(/-/g, '').padStart(20, '0');
+                    const nombreCliente = String(getCellValue("CLIENTE")).slice(0, 30).padEnd(30, ' ');
+                    const impTotal = String(getCellValue("IMP_TOTAL")).replace(/[.,]/g, '').padStart(15, '0');
+                    const ceros15 = '0'.repeat(15);
+                    const impIVA = String(getCellValue("IMP_IVA")).replace(/[.,]/g, '').padStart(15, '0');
+                    const ceros15_2 = '0'.repeat(15);
+                    const tipoMoneda = "PES";
+                    const valorFijo1 = "0001000000";
+                    const valorFijo2 = "1";
+                    const valorFijo3 = "0";
+                    const ceros15_3 = '0'.repeat(15);
+                    const fecha2 = fecha;
+
+                    return `${fecha}${tipoDoc}${ptoVenta}${nro}${espacios}${tipoDocCliente}${cuitCliente}${nombreCliente}${impTotal}${ceros15}${ceros15}${ceros15}${impIVA}${ceros15_2}${ceros15_2}${ceros15_2}${tipoMoneda}${valorFijo1}${valorFijo2}${valorFijo3}${ceros15_3}${fecha2}`;
+                }).join('\n');
+                
+                downloadFile(ventasTexto, "ventas.txt");
+            }
+            
+            if (tipo === 'alicuotas' || tipo === 'ambos') {
+                const alicuotasTexto = globalDataRows.map(row => {
+                    const getCellValue = (header) => row[globalHeaders.indexOf(header)] || "";
+                    
+                    const tipoDoc = String(getCellValue("TIPO_DOC")).replace(/[^0-9]/g, '').slice(0, 3);
+                    const ptoVenta = String(getCellValue("PTO_VENTA")).padStart(5, '0');
+                    const nro = String(getCellValue("NRO")).padStart(20, '0');
+                    const impIVA = String(getCellValue("IMP_GRAVADO")).replace(/[.,]/g, '').padStart(15, '0');
+                    const porcIVA = String(getCellValue("PORC_IVA")).replace(/[.,]/g, '').padStart(4, '0');
+                    const impTotal = String(getCellValue("IMP_IVA")).replace(/[.,]/g, '').padStart(15, '0');
+
+                    return `${tipoDoc}${ptoVenta}${nro}${impIVA}${porcIVA}${impTotal}`;
+                }).join('\n');
+                 
+                if (tipo === 'ambos') {
+                    setTimeout(() => downloadFile(alicuotasTexto, "alicuotas.txt"), 500);
+                } else {
+                    downloadFile(alicuotasTexto, "alicuotas.txt");
+                }
+            }
+        }
+    </script>
+</body>
+</html>

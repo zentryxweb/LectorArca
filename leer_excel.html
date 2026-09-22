@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lector y Descargador de Archivos</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        input[type="file"] { margin-bottom: 20px; }
+        #output { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        #output th, #output td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        #output th { background-color: #f2f2f2; }
+        .input-fields label, .input-fields input { display: block; margin-bottom: 10px; }
+        #buttons-container button { padding: 10px 15px; margin-right: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <h1>Lectura de Archivo Excel</h1>
+    
+    <div class="input-fields">
+        <label for="codigoDocVendedor">Código de documento vendedor</label>
+        <input type="text" id="codigoDocVendedor" placeholder="Ej: 80">
+        
+        <label for="nombreApellido">Nombre y apellido</label>
+        <input type="text" id="nombreApellido" placeholder="Ej: Juan Pérez">
+
+        <label for="cuit">CUIT</label>
+        <input type="text" id="cuit" placeholder="Ej: 20-12345678-9">
+    </div>
+
+    <p>Selecciona un archivo .xls o .xlsx</p>
+    <input type="file" id="archivoInput" accept=".xls,.xlsx">
+    
+    <div id="buttons-container" style="display: none;">
+        <button id="descargarVentasBtn">Descargar Ventas</button>
+        <button id="descargarAlicuotasBtn">Descargar Alícuotas</button>
+        <button id="descargarAmbosBtn">Descargar Ambos Archivos</button>
+    </div>
+
+    <pre id="info"></pre>
+    <table id="output"></table>
+    
+    <script>
+        document.getElementById('archivoInput').addEventListener('change', handleFile, false);
+        document.getElementById('descargarVentasBtn').addEventListener('click', () => descargarTXT('ventas'));
+        document.getElementById('descargarAlicuotasBtn').addEventListener('click', () => descargarTXT('alicuotas'));
+        document.getElementById('descargarAmbosBtn').addEventListener('click', () => descargarTXT('ambos'));
+
+        let globalHeaders;
+        let globalDataRows;
+        
+        function handleFile(e) {
+            const archivo = e.target.files[0];
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                if (jsonData.length === 0) {
+                    document.getElementById('info').textContent = 'El archivo está vacío.';
+                    return;
+                }
+
+                const primeraFilaVacia = jsonData[0].every(celda => celda === null || celda === undefined || celda === '');
+                
+                if (primeraFilaVacia && jsonData.length > 1) {
+                    globalHeaders = jsonData[1];
+                    globalDataRows = jsonData.slice(2);
+                    document.getElementById('info').textContent = 'La primera línea está vacía. Usando la segunda como cabecera.';
+                } else {
+                    globalHeaders = jsonData[0];
+                    globalDataRows = jsonData.slice(1);
+                    document.getElementById('info').textContent = 'Usando la primera línea como cabecera.';
+                }
+
+                displayTable(globalHeaders, globalDataRows);
+                document.getElementById('buttons-container').style.display = 'block';
+            };
+
+            reader.readAsArrayBuffer(archivo);
+        }
+
+        function displayTable(headers, rows) {
+            const outputTable = document.getElementById('output');
+            outputTable.innerHTML = '';
+
+            const headerRow = outputTable.insertRow();
+            headers.forEach(headerText => {
+                const th = document.createElement('th');
+                th.textContent = headerText;
+                headerRow.appendChild(th);
+            });
+
+            // Buscar el índice de la columna "TIPO_DOC"
+            const tipoDocIndex = headers.indexOf("TIPO_DOC");
+
+            rows.forEach(row => {
+                const tr = outputTable.insertRow();
+                row.forEach((cellData, index) => {
+                    const td = tr.insertCell();
+                    if (index === tipoDocIndex) {
+                        let cleanedData = String(cellData).replace(/_Factura_B/g, '');
+                        td.textContent = cleanedData;
+                    } else {
+                        td.textContent = cellData;
+                    }
+                });
+            });
+        }
+
+        function descargarTXT(tipo) {
+            let textoADescargar = '';
+            let filename = '';
+
+            const alicuotasHeaders = ["TIPO_DOC", "PTO_VENTA", "NRO", "IMP_IVA", "PORC_IVA"];
+            
+            const getMappedData = (headers, dataRows) => {
+                const ventasData = dataRows.map(row => {
+                    const fecha = row[headers.indexOf("FECHA")] || "";
+                    const ptoVenta = row[headers.indexOf("PTO_VENTA")] || "";
+                    const nro = row[headers.indexOf("NRO")] || "";
+                    const tipoDoc = row[headers.indexOf("TIPO_DOC")] || "";
+                    const cuitCliente = row[headers.indexOf("NRO_DOC")] || "";
+                    const nombreCliente = row[headers.indexOf("CLIENTE")] || "";
+                    const impTotal = row[headers.indexOf("IMP_TOTAL")] || "";
+                    const impIva = row[headers.indexOf("IMP_IVA")] || "";
+                    const porcIva = row[headers.indexOf("PORC_IVA")] || "";
+                    return {fecha, ptoVenta, nro, tipoDoc, cuitCliente, nombreCliente, impTotal, impIva, porcIva};
+                });
+                return { ventasData: ventasData, alicuotasData: dataRows };
+            };
+
+            const { ventasData, alicuotasData } = getMappedData(globalHeaders, globalDataRows);
+
+            if (tipo === 'ventas') {
+                const ventasTexto = ventasData.map(row => {
+                    // Regla: 1 (Primera columna - FECHA)
+                    let fecha = String(row.fecha).trim();
+                    const año = fecha.slice(-4);
+                    const mes = fecha.slice(3, 5);
+                    const dia = fecha.slice(0, 2);
+                    fecha = `${año}${mes}${dia}`;
+
+                    // Regla: 2 (Segunda columna - PTO_VENTA)
+                    const ptoVenta = (row.ptoVenta ? String(row.ptoVenta) : "").padStart(5, '0');
+
+                    // Regla: 3 (Tercera columna - NRO)
+                    const nro = (row.nro ? String(row.nro) : "").padStart(20, '0');
+
+                    // Regla: 4 (Cuarta columna - TIPO_DOC)
+                    let tipoDoc = (row.tipoDoc ? String(row.tipoDoc).replace(/[^0-9]/g, '') : "");
+                    tipoDoc = tipoDoc.slice(0, 3).padEnd(3, ' ');
+
+                    // Regla: 5 (Agregar 20 espacios)
+                    const espacios = ' '.repeat(20);
+
+                    // Reglas: 6, 7, 8 (Quinta y sexta columna - NRO_DOC y CLIENTE)
+                    const tipoDocCliente = (row.cuitCliente === '11111111' ? '99' : '96');
+                    const cuitCliente = (row.cuitCliente ? String(row.cuitCliente).replace(/-/g, '') : "").padStart(20, '0');
+                    const nombreCliente = (row.nombreCliente ? String(row.nombreCliente).slice(0, 30) : "").padEnd(30, ' ');
+
+                    // Regla: 9 (Decima columna - IMP_TOTAL)
+                    const impTotal = (row.impTotal ? String(row.impTotal).replace(/[.,]/g, '') : "").padStart(15, '0');
+
+                    // Reglas 10-12: 15 ceros
+                    const ceros15 = '0'.repeat(15);
+                    
+                    // Regla 13: (Novena columna - IMP_IVA)
+                    const impIVA = (row.impIva ? String(row.impIva).replace(/[.,]/g, '') : "").padStart(15, '0');
+
+                    // Reglas 14-16: 15 ceros
+                    const ceros15_2 = '0'.repeat(15);
+
+                    // Regla 17: (Completar con "PES")
+                    const tipoMoneda = "PES";
+
+                    // Regla 18: (Completar con "0001000000")
+                    const valorFijo1 = "0001000000";
+
+                    // Regla 19: (Completar con "1")
+                    const valorFijo2 = "1";
+
+                    // Regla 20: (Completar con "0")
+                    const valorFijo3 = "0";
+
+                    // Regla 21: (Agregar 15 ceros)
+                    const ceros15_3 = '0'.repeat(15);
+
+                    // Regla 22: (Primera columna - FECHA, nuevamente)
+                    const fecha2 = fecha;
+
+                    return `${fecha}${ptoVenta}${nro}${tipoDoc}${espacios}${tipoDocCliente}${cuitCliente}${nombreCliente}${impTotal}${ceros15}${ceros15}${ceros15}${impIVA}${ceros15_2}${ceros15_2}${ceros15_2}${tipoMoneda}${valorFijo1}${valorFijo2}${valorFijo3}${ceros15_3}${fecha2}`;
+                }).join('\n');
+                
+                textoADescargar = ventasTexto;
+                filename = "ventas.txt";
+
+            } else if (tipo === 'alicuotas') {
+
+                const alicuotasTexto = globalDataRows.map(row => {
+                    // Regla 1: Cuarta columna (TIPO_DOC) - Eliminar texto y tomar 3 primeros
+                    const tipoDoc = (row[3] ? String(row[3]).replace(/[^0-9]/g, '') : "").slice(0, 3);
+                    
+                    // Regla 2: Segunda columna (PTO_VENTA) - Rellenar con 0 a la izquierda, longitud 5
+                    const ptoVenta = (row[1] ? String(row[1]) : "").padStart(5, '0');
+                    
+                    // Regla 3: Tercera columna (NRO) - Rellenar con 0 a la izquierda, longitud 20
+                    const nro = (row[2] ? String(row[2]) : "").padStart(20, '0');
+
+                    // Regla 4: Octava columna (IMP_IVA) - Eliminar puntos/comas y rellenar con 0 a la izquierda, longitud 15
+                    const impIVA = (row[7] ? String(row[7]).replace(/[.,]/g, '') : "").padStart(15, '0');
+
+                    // Regla 5: Novena columna (PORC_IVA) - Eliminar puntos/comas y rellenar con 0 a la izquierda, longitud 4
+                    const porcIVA = (row[8] ? String(row[8]).replace(/[.,]/g, '') : "").padStart(4, '0');
+
+                    // Regla 6: Decima columna (IMP_TOTAL) - Eliminar puntos/comas y rellenar con 0 a la izquierda, longitud 15
+                    const impTotal = (row[9] ? String(row[9]).replace(/[.,]/g, '') : "").padStart(15, '0');
+
+                    return `${tipoDoc}${ptoVenta}${nro}${impIVA}${porcIVA}${impTotal}`;
+                }).join('\n');
+                 
+                textoADescargar = alicuotasTexto;
+                filename = "alicuotas.txt";
+
+            } else if (tipo === 'ambos') {
+                const ventasTexto = ventasData.map(row => {
+                    // ... (lógica de ventas sin cambios)
+                    // Regla: 1 (Primera columna - FECHA)
+                    let fecha = String(row.fecha).trim();
+                    const año = fecha.slice(-4);
+                    const mes = fecha.slice(3, 5);
+                    const dia = fecha.slice(0, 2);
+                    fecha = `${año}${mes}${dia}`;
+
+                    // Regla: 2 (Segunda columna - PTO_VENTA)
+                    const ptoVenta = (row.ptoVenta ? String(row.ptoVenta) : "").padStart(5, '0');
+
+                    // Regla: 3 (Tercera columna - NRO)
+                    const nro = (row.nro ? String(row.nro) : "").padStart(20, '0');
+
+                    // Regla: 4 (Cuarta columna - TIPO_DOC)
+                    let tipoDoc = (row.tipoDoc ? String(row.tipoDoc).replace(/[^0-9]/g, '') : "");
+                    tipoDoc = tipoDoc.slice(0, 3).padEnd(3, ' ');
+
+                    // Regla: 5 (Agregar 20 espacios)
+                    const espacios = ' '.repeat(20);
+
+                    // Reglas: 6, 7, 8 (Quinta y sexta columna - NRO_DOC y CLIENTE)
+                    const tipoDocCliente = (row.cuitCliente === '11111111' ? '99' : '96');
+                    const cuitCliente = (row.cuitCliente ? String(row.cuitCliente).replace(/-/g, '') : "").padStart(20, '0');
+                    const nombreCliente = (row.nombreCliente ? String(row.nombreCliente).slice(0, 30) : "").padEnd(30, ' ');
+
+                    // Regla: 9 (Decima columna - IMP_TOTAL)
+                    const impTotal = (row.impTotal ? String(row.impTotal).replace(/[.,]/g, '') : "").padStart(15, '0');
+
+                    // Reglas 10-12: 15 ceros
+                    const ceros15 = '0'.repeat(15);
+                    
+                    // Regla 13: (Novena columna - IMP_IVA)
+                    const impIVA = (row.impIva ? String(row.impIva).replace(/[.,]/g, '') : "").padStart(15, '0');
+
+                    // Reglas 14-16: 15 ceros
+                    const ceros15_2 = '0'.repeat(15);
+
+                    // Regla 17: (Completar con "PES")
+                    const tipoMoneda = "PES";
+
+                    // Regla 18: (Completar con "0001000000")
+                    const valorFijo1 = "0001000000";
+
+                    // Regla 19: (Completar con "1")
+                    const valorFijo2 = "1";
+
+                    // Regla 20: (Completar con "0")
+                    const valorFijo3 = "0";
+
+                    // Regla 21: (Agregar 15 ceros)
+                    const ceros15_3 = '0'.repeat(15);
+
+                    // Regla 22: (Primera columna - FECHA, nuevamente)
+                    const fecha2 = fecha;
+
+                    return `${fecha}${ptoVenta}${nro}${tipoDoc}${espacios}${tipoDocCliente}${cuitCliente}${nombreCliente}${impTotal}${ceros15}${ceros15}${ceros15}${impIVA}${ceros15_2}${ceros15_2}${ceros15_2}${tipoMoneda}${valorFijo1}${valorFijo2}${valorFijo3}${ceros15_3}${fecha2}`;
+                }).join('\n');
+                
+                const alicuotasTexto = globalDataRows.map(row => {
+                    const tipoDoc = (row[3] ? String(row[3]).replace(/[^0-9]/g, '') : "").slice(0, 3);
+                    const ptoVenta = (row[1] ? String(row[1]) : "").padStart(5, '0');
+                    const nro = (row[2] ? String(row[2]) : "").padStart(20, '0');
+                    const impIVA = (row[7] ? String(row[7]).replace(/[.,]/g, '') : "").padStart(15, '0');
+                    const porcIVA = (row[8] ? String(row[8]).replace(/[.,]/g, '') : "").padStart(4, '0');
+                    const impTotal = (row[9] ? String(row[9]).replace(/[.,]/g, '') : "").padStart(15, '0');
+                    return `${tipoDoc}${ptoVenta}${nro}${impIVA}${porcIVA}${impTotal}`;
+                }).join('\n');
+                
+                textoADescargar = ventasTexto + '\n\n' + alicuotasTexto;
+                filename = "ventas_y_alicuotas.txt";
+            }
+            
+            if (textoADescargar) {
+                const blob = new Blob([textoADescargar], { type: 'text/plain;charset=utf-8' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(link.href);
+            }
+        }
+    </script>
+</body>
+</html>

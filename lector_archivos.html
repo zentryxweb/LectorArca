@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Validador Libro IVA Digital - Ventas</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #f5f8fa; margin: 30px; }
+  h2 { color: #004b8d; }
+  input[type=file] { margin: 10px 0; }
+  button { background: #007acc; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 5px; }
+  button:hover { background: #005b9f; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+  th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+  th { background: #007acc; color: white; }
+  .ok { background-color: #c8f7c5; }
+  .error { background-color: #f7c5c5; }
+  .summary { font-weight: bold; background: #f0f0f0; }
+</style>
+</head>
+<body>
+
+<h2>📘 Validador de Libro IVA Digital - Ventas (CBTE + ALICUOTAS)</h2>
+
+<label>Seleccionar archivo de cabecera (CBTE):</label><br>
+<input type="file" id="fileCbte" accept=".txt,.csv"><br><br>
+
+<label>Seleccionar archivo de alícuotas (ALICUOTAS):</label><br>
+<input type="file" id="fileAli" accept=".txt,.csv"><br><br>
+
+<button onclick="leerArchivos()">Validar Archivos</button>
+<a href="index.html"><button>⬅ Volver al Menú</button></a>
+<div id="resultado"></div>
+
+<script>
+async function leerArchivo(fileInput) {
+  return new Promise((resolve, reject) => {
+    const file = fileInput.files[0];
+    if (!file) return resolve([]);
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result.trim().split(/\r?\n/));
+    reader.onerror = e => reject(e);
+    reader.readAsText(file);
+  });
+}
+
+async function leerArchivos() {
+  const cbteLines = await leerArchivo(document.getElementById("fileCbte"));
+  const aliLines = await leerArchivo(document.getElementById("fileAli"));
+  if (cbteLines.length === 0 || aliLines.length === 0) {
+    alert("Debe seleccionar ambos archivos antes de validar.");
+    return;
+  }
+  validar(cbteLines, aliLines);
+}
+
+function validar(cbteLines, aliLines) {
+  const resultado = [];
+
+  // Parseo de cabecera
+  const comprobantes = cbteLines.map(l => ({
+    tipo: l.substring(8,11),
+    pv: l.substring(11,16),
+    nro: l.substring(16,36),
+    total: parseFloat(l.substring(108,123)) / 100,
+    noGrav: parseFloat(l.substring(123,138)) / 100,
+    exento: parseFloat(l.substring(153,168)) / 100,
+    percNac: parseFloat(l.substring(168,183)) / 100,
+    percIB: parseFloat(l.substring(183,198)) / 100,
+    percMun: parseFloat(l.substring(198,213)) / 100,
+    impInt: parseFloat(l.substring(213,228)) / 100,
+    otrosTrib: parseFloat(l.substring(243,258)) / 100
+  }));
+
+  // Parseo de alícuotas
+  const alicuotas = aliLines.map(l => ({
+    tipo: l.substring(0,3),
+    pv: l.substring(3,8),
+    nro: l.substring(8,28),
+    neto: parseFloat(l.substring(28,43)) / 100,
+    iva: parseFloat(l.substring(47,62)) / 100
+  }));
+
+  // Comparación
+  comprobantes.forEach(c => {
+    const aliMatch = alicuotas.filter(a => a.tipo === c.tipo && a.pv === c.pv && a.nro === c.nro);
+    const neto = aliMatch.reduce((s,a)=>s+a.neto,0);
+    const iva = aliMatch.reduce((s,a)=>s+a.iva,0);
+    const gravadoEsperado = c.total - (c.noGrav + c.exento + c.percNac + c.percIB + c.percMun + c.impInt + c.otrosTrib);
+    const suma = +(neto + iva).toFixed(2);
+    const diff = +(gravadoEsperado - suma).toFixed(2);
+    resultado.push({
+      tipo: c.tipo, pv: c.pv, nro: c.nro,
+      total: c.total, neto, iva,
+      gravadoEsperado, diff,
+      ok: Math.abs(diff) < 0.01
+    });
+  });
+
+  // Mostrar tabla
+  let html = "<table><tr><th>Tipo</th><th>PV</th><th>Comprobante</th><th>Total</th><th>Neto (Ali)</th><th>IVA (Ali)</th><th>Total Gravado Esperado</th><th>Diferencia</th><th>Estado</th></tr>";
+  let totalCbte = 0, totalAli = 0, totalIVA = 0, totalDiff = 0;
+  resultado.forEach(r => {
+    totalCbte += r.total;
+    totalAli += r.neto;
+    totalIVA += r.iva;
+    totalDiff += r.diff;
+    html += `<tr class="${r.ok?'ok':'error'}">
+      <td>${r.tipo}</td>
+      <td>${r.pv}</td>
+      <td>${r.nro}</td>
+      <td>${r.total.toFixed(2)}</td>
+      <td>${r.neto.toFixed(2)}</td>
+      <td>${r.iva.toFixed(2)}</td>
+      <td>${r.gravadoEsperado.toFixed(2)}</td>
+      <td>${r.diff.toFixed(2)}</td>
+      <td>${r.ok?'✅ OK':'❌ Error'}</td>
+    </tr>`;
+  });
+  html += `<tr class='summary'><td colspan="3">TOTALES</td>
+    <td>${totalCbte.toFixed(2)}</td>
+    <td>${totalAli.toFixed(2)}</td>
+    <td>${totalIVA.toFixed(2)}</td>
+    <td></td>
+    <td>${totalDiff.toFixed(2)}</td>
+    <td></td>
+  </tr></table>`;
+
+  document.getElementById("resultado").innerHTML = html;
+}
+</script>
+
+</body>
+</html>
